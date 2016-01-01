@@ -81,3 +81,10 @@ If the token is not free and if there is a strict length limitation, the token w
 > http://127.0.0.1/google
 
 Will redirect to the long URL registered with the token "google".
+
+> http://127.0.0.1/admin/google
+
+Will give JSON representation of URL information registered with the token "google". Example :
+
+    {"Key":"google","ShortUrl":"http://127.0.0.1:9999/admin/google","LongUrl":"http://www.google.com","CreationDate":1451678963,"Clicks":1}
+
