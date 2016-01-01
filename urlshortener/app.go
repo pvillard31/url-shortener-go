@@ -5,6 +5,7 @@ import (
 	"encoding/json"
     "io/ioutil"
     "path/filepath"
+    "math/rand"
 	"errors"
 	"os"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 	"regexp"
 	redis "gopkg.in/redis.v3"
@@ -20,15 +20,18 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const (
-	// special key in redis, that is our global counter
-	COUNTER = "__counter__"
-)
-
 var (
 	redisclient  *redis.Client
 	config		 *Config
 	filenotfound string
+	src = rand.NewSource(time.Now().UnixNano())
+)
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyz1234567890"
+const (
+    letterIdxBits = 6                    // 6 bits to represent a letter index
+    letterIdxMask = 1<<letterIdxBits - 1 // All 1-bits, as many as letterIdxBits
+    letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
 )
 
 type Config struct {
@@ -38,6 +41,9 @@ type Config struct {
         Redisaddress string
         Redisdatabase int64
         Redispassword string
+        Codelength int
+        Expirationdays int
+        Strictlength bool
 }
 
 type MyUrl struct {
@@ -58,7 +64,7 @@ func (k MyUrl) Json() []byte {
 // be used. Clicks will be set to 0 and CreationDate to time.Nanoseconds()
 func NewMyUrl(key, shorturl, longurl string) *MyUrl {
 	myUrl := new(MyUrl)
-	myUrl.CreationDate = time.Now().UnixNano()
+	myUrl.CreationDate = time.Now().Unix()
 	myUrl.Key = key
 	myUrl.LongUrl = longurl
 	myUrl.ShortUrl = shorturl
@@ -120,12 +126,18 @@ func load(key string) (*MyUrl, error) {
 		myUrl := new(MyUrl)
 		myUrl.Key = key
 		reply := redisclient.HMGet(key, "LongUrl", "ShortUrl", "CreationDate", "Clicks").Val()
+		create, _ := strconv.ParseInt(reply[2].(string), 10, 64)
+		click, _ := strconv.ParseInt(reply[3].(string), 10, 64)
+		
 		myUrl.LongUrl, myUrl.ShortUrl, myUrl.CreationDate, myUrl.Clicks = 
-			reply[0].(string), reply[1].(string), reply[2].(int64), reply[3].(int64)
+			reply[0].(string), 
+			reply[1].(string), 
+			create, 
+			click
 			
 		log.WithFields(log.Fields{
 		    "url": myUrl,
-		  }).Info("/admin request")
+		  }).Info("REDIS GET")
 	
 		return myUrl, nil
 	}
@@ -164,7 +176,7 @@ func resolve(w http.ResponseWriter, r *http.Request) {
 	myUrl, err := load(short)
 	
 	if err == nil {
-		go redisclient.HIncrBy(myUrl.Key, "Clicks", 1)
+		redisclient.HIncrBy(myUrl.Key, "Clicks", 1).Result()
 		http.Redirect(w, r, myUrl.LongUrl, http.StatusMovedPermanently)
 	} else {
 		http.Redirect(w, r, filenotfound, http.StatusMovedPermanently)
@@ -176,11 +188,78 @@ func isValidUrl(rawurl string) (u *url.URL, err error) {
 	if len(rawurl) == 0 {
 		return nil, errors.New("empty url")
 	}
-	// XXX this needs some love...
-	if !strings.HasPrefix(rawurl, "http") {
-		rawurl = fmt.Sprintf("http://%s", rawurl)
+	// test that the URL is active
+	_, ex := http.Get("http://" + rawurl)
+	if ex != nil {
+		return nil, errors.New("invalid url")
 	}
 	return url.Parse(rawurl)
+}
+
+// encore the url
+func encode(input string) string {
+	custom := input
+	if custom == "" {
+		custom = randSeq(config.Codelength)
+	}
+	// while key not existing, generating key
+	i := 0
+	random := ""
+	if config.Strictlength {
+		custom = custom[:config.Codelength]
+	}
+	for isNotFree(custom) && i < 100 {
+		random = strconv.Itoa(rand.Intn(999))
+		l := len(random)
+		if config.Strictlength && l + len(custom) > config.Codelength {
+			custom = custom[:config.Codelength-l] + random
+		} else {
+			custom = custom + random
+		}
+		i = i + 1
+	}
+	
+	// everything taken... random !
+	if i == 100 {
+		for isNotFree(custom) {
+			custom = randSeq(config.Codelength)
+		}
+	}
+	
+	// return key
+	return custom
+}
+
+// check if an encoded url is free
+// key not existing or key existing and creation date older than 3 months
+func isNotFree(key string) bool {
+	if ok, _ := redisclient.HExists(key, "ShortUrl").Result(); ok {
+		reply := redisclient.HMGet(key, "CreationDate").Val()
+		create, _ := strconv.ParseInt(reply[0].(string), 10, 64)
+		return time.Now().Unix() - create < int64(config.Expirationdays * 3600)
+	} else {
+		return false
+	}
+}
+
+
+// generate a random string of a given length
+func randSeq(n int) string {
+    b := make([]byte, n)
+    // A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
+    for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
+        if remain == 0 {
+            cache, remain = src.Int63(), letterIdxMax
+        }
+        if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
+            b[i] = letterBytes[idx]
+            i--
+        }
+        cache >>= letterIdxBits
+        remain--
+    }
+
+    return string(b)
 }
 
 // function to shorten and store a url
@@ -197,12 +276,22 @@ func shorten(w http.ResponseWriter, r *http.Request) {
 	    "value": leUrl,
 	  }).Info("/shortlink request")
 	
-	theUrl, err := isValidUrl(string(leUrl))
+	
+	// check if there is a customisation
+	re = regexp.MustCompile(`^(.*)&custom=(.*)$`)
+	splits := re.FindStringSubmatch(leUrl)
+	custom := ""
+	// if yes
+	if len(splits) > 1 {
+		leUrl = splits[1]
+		custom = splits[2]
+	}
+	
+	_, err := isValidUrl(string(leUrl))
 	if err == nil {
-		ctr, _ := redisclient.Incr(COUNTER).Result()
-		encoded := Encode(ctr)
+		encoded := encode(custom)
 		location := fmt.Sprintf("http://%s/admin/%s", host, encoded)
-		store(encoded, location, theUrl.String())
+		store(encoded, location, "http://" + leUrl)
 
 		home := r.FormValue("home")
 		

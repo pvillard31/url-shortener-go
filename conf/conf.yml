@@ -1,6 +1,9 @@
 httpport: 9999
-httpaddress: 0.0.0.0
+httpaddress: 127.0.0.1
 filenotfound: http://www.404notfound.fr/assets/images/pages/img/githubdotcom.jpg
 redisaddress: 127.0.0.1:6379
 redisdatabase: 0
 redispassword:
+codelength: 6
+expirationdays: 90
+strictlength: false
