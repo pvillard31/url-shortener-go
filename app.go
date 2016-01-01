@@ -36,6 +36,7 @@ const (
 
 type Config struct {
         Httpport string
+        Httplisten string
         Httpaddress string
         Filenotfound string
         Redisaddress string
@@ -351,7 +352,7 @@ func main() {
 	router.HandleFunc("/{short:([a-zA-Z0-9]+$)}", resolve)
 	router.HandleFunc("/admin/{short:[a-zA-Z0-9]+}", info)
 
-	listen := config.Httpaddress
+	listen := config.Httplisten
 	port := config.Httpport
 	s := &http.Server{
 		Addr:    listen + ":" + port,

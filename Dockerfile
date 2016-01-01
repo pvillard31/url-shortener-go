@@ -1,6 +1,3 @@
-FROM golang:latest 
-RUN mkdir /app 
-ADD . /app/ 
-WORKDIR /app 
-RUN go build -o main . 
-CMD ["/app/main /app/conf.yml"]
+FROM golang:1.5.2-onbuild
+EXPOSE 9999
+CMD ["app", "/go/src/app/conf.yml"]
