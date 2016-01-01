@@ -21,12 +21,15 @@ import (
 )
 
 var (
+	// REDIS client
 	redisclient  *redis.Client
+	// Configuration of the application
 	config		 *Config
-	filenotfound string
+	// source for random function
 	src = rand.NewSource(time.Now().UnixNano())
 )
 
+// alphabet for random string generation
 const letterBytes = "abcdefghijklmnopqrstuvwxyz1234567890"
 const (
     letterIdxBits = 6                    // 6 bits to represent a letter index
@@ -34,6 +37,7 @@ const (
     letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
 )
 
+// configuration object
 type Config struct {
         Httpport string
         Httplisten string
@@ -47,22 +51,23 @@ type Config struct {
         Strictlength bool
 }
 
+// representation of a URL
 type MyUrl struct {
-	Key          string
-	ShortUrl     string
-	LongUrl      string
-	CreationDate int64
-	Clicks       int64
+	Key          string // token
+	ShortUrl     string // short URL
+	LongUrl      string // long URL
+	CreationDate int64 // creation date of the short link
+	Clicks       int64 // number of visits
 }
 
-// Converts the MyUrl to JSON.
+// Function to convert the MyUrl to JSON.
 func (k MyUrl) Json() []byte {
 	b, _ := json.Marshal(k)
 	return b
 }
 
 // Creates a new MyUrl instance. The Given key, shorturl and longurl will
-// be used. Clicks will be set to 0 and CreationDate to time.Nanoseconds()
+// be used. Clicks will be set to 0 and CreationDate to time.Now().Unix()
 func NewMyUrl(key, shorturl, longurl string) *MyUrl {
 	myUrl := new(MyUrl)
 	myUrl.CreationDate = time.Now().Unix()
@@ -73,8 +78,9 @@ func NewMyUrl(key, shorturl, longurl string) *MyUrl {
 	return myUrl
 }
 
-// stores a new MyUrl for the given key, shorturl and longurl. Existing
-// ones with the same url will be overwritten
+// Stores a new MyUrl for the given key, shorturl and longurl. Existing
+// ones with the same url will be overwritten (this may happen only in 
+// case the link is no longer valid regarding the configured limit duration) 
 func store(key, shorturl, longurl string) *MyUrl {
 	myUrl := NewMyUrl(key, shorturl, longurl)
 	_, err := redisclient.HSet(myUrl.Key, "LongUrl", myUrl.LongUrl).Result()
@@ -120,7 +126,7 @@ func store(key, shorturl, longurl string) *MyUrl {
 	return myUrl
 }
 
-// loads a MyUrl instance for the given key. If the key is
+// Gets a MyUrl instance for the given key from REDIS. If the key is
 // not found, os.Error is returned.
 func load(key string) (*MyUrl, error) {
 	if ok, _ := redisclient.HExists(key, "ShortUrl").Result(); ok {
@@ -150,7 +156,9 @@ func load(key string) (*MyUrl, error) {
 	return nil, errors.New("unknown key: " + key)
 }
 
-// function to display the info about a MyUrl given by it's Key
+// Function to display the info about a MyUrl given by it's Key.
+// In particular it gives the nmber of access to the URL.
+// The result is displayed in JSON format
 func info(w http.ResponseWriter, r *http.Request) {
 	log.Info("Received a /admin request")
 	
@@ -166,7 +174,7 @@ func info(w http.ResponseWriter, r *http.Request) {
 		w.Write(myUrl.Json())
 		io.WriteString(w, "\n")
 	} else {
-		http.Redirect(w, r, filenotfound, http.StatusNotFound)
+		http.Redirect(w, r, config.Filenotfound, http.StatusNotFound)
 	}
 }
 
@@ -180,7 +188,7 @@ func resolve(w http.ResponseWriter, r *http.Request) {
 		redisclient.HIncrBy(myUrl.Key, "Clicks", 1).Result()
 		http.Redirect(w, r, myUrl.LongUrl, http.StatusMovedPermanently)
 	} else {
-		http.Redirect(w, r, filenotfound, http.StatusMovedPermanently)
+		http.Redirect(w, r, config.Filenotfound, http.StatusMovedPermanently)
 	}
 }
 
@@ -197,18 +205,26 @@ func isValidUrl(rawurl string) (u *url.URL, err error) {
 	return url.Parse(rawurl)
 }
 
-// encore the url
+// Function to encode the URL. It looks for customization and
+// ensure to give a free token.
 func encode(input string) string {
+	// if customization
 	custom := input
 	if custom == "" {
 		custom = randSeq(config.Codelength)
 	}
+	
 	// while key not existing, generating key
 	i := 0
 	random := ""
+	
+	// if the length of the customization is not limited
 	if config.Strictlength {
 		custom = custom[:config.Codelength]
 	}
+	
+	// while the token is not free, try to generate a correct one
+	// still respecting the customization
 	for isNotFree(custom) && i < 100 {
 		random = strconv.Itoa(rand.Intn(999))
 		l := len(random)
@@ -231,7 +247,7 @@ func encode(input string) string {
 	return custom
 }
 
-// check if an encoded url is free
+// check if an encoded url is free. It looks for :
 // key not existing or key existing and creation date older than 3 months
 func isNotFree(key string) bool {
 	if ok, _ := redisclient.HExists(key, "ShortUrl").Result(); ok {
@@ -247,7 +263,6 @@ func isNotFree(key string) bool {
 // generate a random string of a given length
 func randSeq(n int) string {
     b := make([]byte, n)
-    // A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
     for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
         if remain == 0 {
             cache, remain = src.Int63(), letterIdxMax
@@ -259,7 +274,6 @@ func randSeq(n int) string {
         cache >>= letterIdxBits
         remain--
     }
-
     return string(b)
 }
 
@@ -313,13 +327,14 @@ func shorten(w http.ResponseWriter, r *http.Request) {
 		    "error": err,
 		  }).Error("/shortlink error")
 	
-		http.Redirect(w, r, filenotfound, http.StatusNotFound)
+		http.Redirect(w, r, config.Filenotfound, http.StatusNotFound)
 	}
 }
 
 func main() {
 	filename, _ := filepath.Abs(os.Args[1])
 	
+	// look for configuration file (YML) and unmarshal it
     yamlFile, err := ioutil.ReadFile(filename)
     if err != nil {
         panic(err)
@@ -330,10 +345,10 @@ func main() {
         panic(err)
     }
 	
+	// Set REDIS client instance
 	host := config.Redisaddress
 	db := config.Redisdatabase
 	passwd := config.Redispassword
-	filenotfound = config.Filenotfound
 
 	redisclient = redis.NewClient(&redis.Options{
     	Addr:     host,
@@ -347,11 +362,13 @@ func main() {
 	    "passwd": passwd,
 	  }).Info("Setting REDIS instance parameters")
 
+	// HTTP instance listening on :
 	router := mux.NewRouter()
 	router.HandleFunc("/shortlink/{url:(.*$)}", shorten)
 	router.HandleFunc("/{short:([a-zA-Z0-9]+$)}", resolve)
 	router.HandleFunc("/admin/{short:[a-zA-Z0-9]+}", info)
 
+	// launch server
 	listen := config.Httplisten
 	port := config.Httpport
 	s := &http.Server{
