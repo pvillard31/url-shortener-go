@@ -1,5 +1,5 @@
 httpport: 9999
-httpaddress: 127.0.0.1
+httpaddress: 0.0.0.0
 filenotfound: http://www.404notfound.fr/assets/images/pages/img/githubdotcom.jpg
 redisaddress: 127.0.0.1:6379
 redisdatabase: 0

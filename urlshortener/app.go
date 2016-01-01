@@ -70,10 +70,37 @@ func NewMyUrl(key, shorturl, longurl string) *MyUrl {
 // ones with the same url will be overwritten
 func store(key, shorturl, longurl string) *MyUrl {
 	myUrl := NewMyUrl(key, shorturl, longurl)
-	go redisclient.HSet(myUrl.Key, "LongUrl", myUrl.LongUrl).Result()
-	go redisclient.HSet(myUrl.Key, "ShortUrl", myUrl.ShortUrl).Result()
-	go redisclient.HSet(myUrl.Key, "CreationDate", strconv.FormatInt(myUrl.CreationDate, 10)).Result()
-	go redisclient.HSet(myUrl.Key, "Clicks", strconv.FormatInt(myUrl.Clicks, 10)).Result()
+	_, err := redisclient.HSet(myUrl.Key, "LongUrl", myUrl.LongUrl).Result()
+	
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("REDIS STORE ERROR")
+    }
+	
+	_, err = redisclient.HSet(myUrl.Key, "ShortUrl", myUrl.ShortUrl).Result()
+	
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("REDIS STORE ERROR")
+    }
+	
+	_, err = redisclient.HSet(myUrl.Key, "CreationDate", strconv.FormatInt(myUrl.CreationDate, 10)).Result()
+	
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("REDIS STORE ERROR")
+    }
+	
+	_, err = redisclient.HSet(myUrl.Key, "Clicks", strconv.FormatInt(myUrl.Clicks, 10)).Result()
+	
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("REDIS STORE ERROR")
+    }
 	
 	log.WithFields(log.Fields{
 		"key": key,
@@ -81,7 +108,7 @@ func store(key, shorturl, longurl string) *MyUrl {
 		"ShortUrl": myUrl.ShortUrl,
 		"CreationDate": strconv.FormatInt(myUrl.CreationDate, 10),
 		"Clicks": strconv.FormatInt(myUrl.Clicks, 10),
-	}).Error("REDIS STORE")
+	}).Info("REDIS STORE")
 	
 	return myUrl
 }
